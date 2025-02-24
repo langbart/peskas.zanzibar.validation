@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import { MongoClient } from 'mongodb';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -8,17 +8,36 @@ import bcrypt from 'bcryptjs';
 
 dotenv.config();
 
-if (!process.env.JWT_SECRET) {
-  console.error('JWT_SECRET is not defined in environment variables');
+// Get MongoDB credentials from environment
+const MONGODB_USER = process.env.MONGODB_USER;
+const MONGODB_PASSWORD = process.env.MONGODB_PASSWORD;
+
+if (!MONGODB_USER || !MONGODB_PASSWORD) {
+  console.error('MongoDB credentials not found in environment variables');
   process.exit(1);
 }
+
+// Construct MongoDB URI with actual credentials
+const MONGODB_URI = (process.env.VITE_MONGODB_URI ?? 'mongodb://localhost:27017')
+  .replace('${MONGODB_USER}', MONGODB_USER)
+  .replace('${MONGODB_PASSWORD}', MONGODB_PASSWORD);
+
+// Add early validation
+if (!MONGODB_URI.includes('mongodb')) {
+  console.error('Invalid MONGODB_URI format');
+  process.exit(1);
+}
+
+console.log('Connecting to MongoDB...', {
+  uri: MONGODB_URI.substring(0, 20) + '...',
+  db: process.env.VITE_DB_NAME
+});
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 // Use non-VITE env vars for backend
-const MONGODB_URI = process.env.VITE_MONGODB_URI;
 const DB_NAME = process.env.VITE_DB_NAME || 'zanzibar-dev';
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -68,22 +87,26 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// Auth middleware
-const auth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+// Add custom type for Request with user
+declare global {
+  namespace Express {
+    interface Request {
+      user?: any;
+    }
+  }
+}
+
+// Auth middleware with proper types
+const auth = (req: Request, res: Response, next: NextFunction): void => {
   try {
     const authHeader = req.headers.authorization;
-    console.log('Auth header:', authHeader); // Debug log
-
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'No token provided' });
+      res.status(401).json({ error: 'No token provided' });
+      return;
     }
 
     const token = authHeader.split(' ')[1];
-    console.log('Token:', token); // Debug log
-
     const decoded = verify(token, JWT_SECRET!);
-    console.log('Decoded token:', decoded); // Debug log
-    
     req.user = decoded;
     next();
   } catch (error) {
@@ -92,8 +115,8 @@ const auth = (req: express.Request, res: express.Response, next: express.NextFun
   }
 };
 
-// Paginated surveys endpoint
-app.get('/api/surveys', auth, async (req, res) => {
+// Paginated surveys endpoint with proper types
+app.get('/api/surveys', auth, async (req: Request, res: Response) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 50;
