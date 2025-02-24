@@ -1,27 +1,95 @@
-import React, { useState, useEffect } from 'react';
-import { IconAlertTriangle } from '@tabler/icons-react';
-import { fetchSurveyFlags, type SurveyResponse } from '../services/mongodb';
-import { login, type AuthResponse } from '../services/auth';
+import React, { useState, useEffect, useMemo } from 'react';
+import { IconSearch } from '@tabler/icons-react';
+import {
+  useReactTable,
+  getCoreRowModel,
+  getSortedRowModel,
+  getFilteredRowModel,
+  createColumnHelper,
+  flexRender,
+  type SortingState,
+  getPaginationRowModel,
+} from '@tanstack/react-table';
+import { fetchSurveyFlags } from '../services/mongodb';
+import { login } from '../services/auth';
+import { SurveyFlag } from '../types/survey';
 
 const ValidationForm: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [submissions, setSubmissions] = useState<SurveyResponse[]>([]);
-  const [selectedSubmission, setSelectedSubmission] = useState<SurveyResponse | null>(null);
-  const [status, setStatus] = useState('validation_status_approved');
-  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+  const [submissions, setSubmissions] = useState<SurveyFlag[]>([]);
+  const [selectedSubmission, setSelectedSubmission] = useState<SurveyFlag | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [globalFilter, setGlobalFilter] = useState('');
+  const [pageSize, setPageSize] = useState(10);
+
+  const columnHelper = createColumnHelper<SurveyFlag>();
+
+  // Now read catch values from the catches array rather than top-level fields.
+  const columns = useMemo(() => [
+    columnHelper.accessor('submission_id', {
+      header: 'SUBMISSION ID',
+      cell: info => info.getValue(),
+    }),
+    // For the catch numbers, join all n_catch values from the catches array.
+    columnHelper.accessor(row => row.catches.map(c => c.n_catch).join(', '), {
+      id: 'n_catch',
+      header: 'CATCH #',
+      cell: info => info.getValue(),
+    }),
+    // For alert flags, gather all defined flags.
+    columnHelper.accessor(row => {
+      const flags = row.catches
+        .map(c => c.alert_flag)
+        .filter(flag => flag !== undefined && flag !== null && flag !== '');
+      return flags.length ? flags.join(', ') : null;
+    }, {
+      id: 'alert_flag',
+      header: 'ALERT FLAG',
+      cell: info => {
+        const flags = info.getValue();
+        return flags ? (
+          <span className="badge bg-danger">Flag: {flags}</span>
+        ) : (
+          <span className="badge bg-success">No Flag</span>
+        );
+      },
+    }),
+    columnHelper.display({
+      id: 'actions',
+      header: 'ACTIONS',
+      cell: ({ row }) => (
+        <button
+          className="btn btn-primary btn-sm"
+          onClick={() => setSelectedSubmission(row.original)}
+        >
+          Review
+        </button>
+      ),
+    }),
+  ], [columnHelper]);
+
+  const table = useReactTable({
+    data: submissions,
+    columns,
+    state: { sorting, globalFilter },
+    onSortingChange: setSorting,
+    onGlobalFilterChange: setGlobalFilter,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    pageCount: Math.ceil(submissions.length / pageSize),
+    initialState: { pagination: { pageSize } },
+  });
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    console.log('Login attempt with:', { username, password }); // Debug log
-
     try {
       const response = await login(username, password);
-      console.log('Login response:', response);
-      
       if (response.success && response.token) {
         setIsAuthenticated(true);
         setError(null);
@@ -29,7 +97,6 @@ const ValidationForm: React.FC = () => {
         throw new Error('Invalid login response');
       }
     } catch (error: any) {
-      console.error('Login failed:', error);
       setError(error.response?.data?.error || 'Login failed');
       setIsAuthenticated(false);
     }
@@ -39,11 +106,9 @@ const ValidationForm: React.FC = () => {
     try {
       setLoading(true);
       const data = await fetchSurveyFlags();
-      console.log('Survey data:', data); // Debug log
       setSubmissions(data);
       setError(null);
     } catch (error: any) {
-      console.error('Failed to load surveys:', error);
       if (error.response?.status === 401) {
         setIsAuthenticated(false);
         setError('Session expired. Please login again.');
@@ -62,29 +127,12 @@ const ValidationForm: React.FC = () => {
   }, [isAuthenticated]);
 
   const handleStatusUpdate = async () => {
-    if (!selectedSubmission) {
-      setUpdateMessage("Please select a submission before updating status");
-      return;
-    }
-
+    if (!selectedSubmission) return;
     try {
-      // Implement actual API call
-      setUpdateMessage("Status updated successfully");
+      // API call to update status goes here
+      console.log('Updating status for submission', selectedSubmission.submission_id);
     } catch (error) {
-      setUpdateMessage("Error updating status");
-    }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'validation_status_approved':
-        return 'success';
-      case 'validation_status_not_approved':
-        return 'danger';
-      case 'validation_status_on_hold':
-        return 'warning';
-      default:
-        return 'secondary';
+      console.error('Error updating status', error);
     }
   };
 
@@ -122,8 +170,8 @@ const ValidationForm: React.FC = () => {
                   />
                 </div>
                 <div className="form-footer">
-                  <button 
-                    type="submit" 
+                  <button
+                    type="submit"
                     className="btn btn-primary w-100"
                     disabled={!username || !password}
                   >
@@ -152,97 +200,139 @@ const ValidationForm: React.FC = () => {
       <div className="card">
         <div className="card-body">
           {loading ? (
-            <div className="text-center">
-              <div className="spinner-border text-primary" role="status">
-                <span className="visually-hidden">Loading...</span>
-              </div>
-            </div>
+            <div className="text-center">Loading...</div>
           ) : error ? (
             <div className="alert alert-danger">{error}</div>
-          ) : submissions.length === 0 ? (
-            <div className="alert alert-info">No submissions found</div>
           ) : (
-            <div className="table-responsive">
-              <table className="table table-vcenter card-table table-striped">
-                <thead>
-                  <tr>
-                    <th>Submission ID</th>
-                    <th>Catches</th>
-                    <th>Alerts</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {submissions.map((submission) => (
-                    <tr 
-                      key={submission.submission_id}
-                      className={selectedSubmission?.submission_id === submission.submission_id ? 'table-active' : ''}
-                      onClick={() => setSelectedSubmission(submission)}
-                      style={{ cursor: 'pointer' }}
-                    >
-                      <td>{submission.submission_id}</td>
-                      <td>{submission.catches.length}</td>
-                      <td>
-                        {submission.total_alerts > 0 && (
-                          <span className="badge bg-danger">{submission.total_alerts}</span>
-                        )}
-                      </td>
-                      <td>
-                        <span className={`badge bg-${getStatusColor(status)}`}>
-                          {status.replace('validation_status_', '')}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {selectedSubmission && (
-            <div className="mt-3">
-              <div className="alert alert-info d-inline-flex">
-                <IconAlertTriangle className="me-2" />
-                Selected submission: {selectedSubmission.submission_id}
+            <>
+              <div className="d-flex justify-content-between align-items-center mb-3">
+                <div className="d-flex align-items-center">
+                  <IconSearch className="text-muted" />
+                  <input
+                    type="text"
+                    className="form-control ms-2"
+                    placeholder="Search submissions..."
+                    value={globalFilter}
+                    onChange={(e) => setGlobalFilter(e.target.value)}
+                  />
+                </div>
               </div>
-              
-              <div className="d-flex gap-2 mt-3">
-                <select 
-                  className="form-select" 
-                  style={{ width: '200px' }}
-                  value={status}
-                  onChange={(e) => setStatus(e.target.value)}
-                >
-                  <option value="validation_status_approved">Approved</option>
-                  <option value="validation_status_not_approved">Not Approved</option>
-                  <option value="validation_status_on_hold">On Hold</option>
-                </select>
-                
-                <button className="btn btn-primary" onClick={handleStatusUpdate}>
-                  Update Status
-                </button>
-                
-                <a 
-                  href="#" 
-                  className="btn btn-secondary" 
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  Edit Submission
-                </a>
-              </div>
-            </div>
-          )}
 
-          {updateMessage && (
-            <div className="alert alert-primary mt-3">
-              {updateMessage}
-            </div>
+              <div className="table-responsive">
+                <table className="table table-vcenter">
+                  <thead>
+                    {table.getHeaderGroups().map(headerGroup => (
+                      <tr key={headerGroup.id}>
+                        {headerGroup.headers.map(header => (
+                          <th
+                            key={header.id}
+                            onClick={header.column.getToggleSortingHandler()}
+                            style={{ cursor: header.column.getCanSort() ? 'pointer' : 'default' }}
+                          >
+                            {flexRender(header.column.columnDef.header, header.getContext())}
+                          </th>
+                        ))}
+                      </tr>
+                    ))}
+                  </thead>
+                  <tbody>
+                    {table.getRowModel().rows.map(row => (
+                      <tr key={row.id}>
+                        {row.getVisibleCells().map(cell => (
+                          <td key={cell.id}>
+                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="d-flex justify-content-between align-items-center mt-4">
+                <div className="text-muted">
+                  Showing{' '}
+                  {table.getState().pagination.pageIndex * table.getState().pagination.pageSize + 1} to{' '}
+                  {Math.min(
+                    (table.getState().pagination.pageIndex + 1) * table.getState().pagination.pageSize,
+                    table.getPrePaginationRowModel().rows.length
+                  )}{' '}
+                  of {table.getPrePaginationRowModel().rows.length}
+                </div>
+                <div className="btn-group">
+                  <button
+                    className="btn btn-outline-primary"
+                    onClick={() => table.previousPage()}
+                    disabled={!table.getCanPreviousPage()}
+                  >
+                    Previous
+                  </button>
+                  <button
+                    className="btn btn-outline-primary"
+                    onClick={() => table.nextPage()}
+                    disabled={!table.getCanNextPage()}
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </>
           )}
         </div>
       </div>
+
+      {selectedSubmission && (
+        <div className="modal modal-blur fade show" style={{ display: 'block' }}>
+          <div className="modal-dialog modal-lg">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">Review Submission {selectedSubmission.submission_id}</h5>
+                <button type="button" className="btn-close" onClick={() => setSelectedSubmission(null)}></button>
+              </div>
+              <div className="modal-body">
+                <div className="table-responsive">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Catch #</th>
+                        <th>Alert Flag</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedSubmission.catches.map((catchItem, index) => (
+                        <tr key={index} className={catchItem.alert_flag ? 'table-danger' : ''}>
+                          <td>{catchItem.n_catch}</td>
+                          <td>
+                            {catchItem.alert_flag ? (
+                              <span className="badge bg-danger">Flag: {catchItem.alert_flag}</span>
+                            ) : (
+                              <span className="badge bg-success">No Flag</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setSelectedSubmission(null)}
+                >
+                  Close
+                </button>
+                <button type="button" className="btn btn-primary" onClick={handleStatusUpdate}>
+                  Update Status
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
-export default ValidationForm; 
+export default ValidationForm;

@@ -42,24 +42,31 @@ app.get('/api/surveys', async (req, res) => {
     
     const data = await collection.find({}).toArray();
     
-    // Process submissions
+    // Process submissions: group by submission_id and flatten catch details.
     const submissions = data
-      .filter(doc => doc.submission_id)
+      .filter(doc => doc.submission_id) // ignore metadata documents
       .reduce((acc: any, doc) => {
         const id = doc.submission_id;
         if (!acc[id]) {
+          // Initialize submission with top-level fields from the first catch
           acc[id] = {
             submission_id: id,
+            n_catch: doc.n_catch,
+            alert_flag: doc.alert_flag || null,
             catches: [],
             total_alerts: 0
           };
         }
+        // Push each catch into the catches array
         acc[id].catches.push({
           n_catch: doc.n_catch,
           alert_flag: doc.alert_flag
         });
+        // Update total alerts and (optionally) the top-level alert_flag if available.
         if (doc.alert_flag) {
           acc[id].total_alerts++;
+          // You can choose whether to keep the first, last, or some computed value.
+          acc[id].alert_flag = doc.alert_flag;
         }
         return acc;
       }, {});
@@ -74,4 +81,4 @@ app.get('/api/surveys', async (req, res) => {
 const PORT = 3001;
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
-}); 
+});
